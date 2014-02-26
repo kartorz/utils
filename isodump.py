@@ -1,25 +1,38 @@
 #! /usr/bin/python
 
-"""  Dump raw meta data of iso9660 file system  """
+"""  Dump raw meta data of iso9660 file system. """
 
 # Author : LiQiong Lee
 
 import sys
 import struct
+import os
 from ctypes import *
 
 BLOCK_SIZE = 2048
 F_ISO = ""
-g_pathTable = None
+g_pathTable = []
 g_priVol = None
+g_cmd = None
 
 def usage():
     """ Prompt user how to use   """
     print """
-Usage: isodump [iso file] [block number] [iso:/dir]
-       iso://dir     iso dirctory 
-isodump xx.iso         Dump the iso image
-isodump xx.iso  iso:/ Dump the root directory of iso image.
+Usage: isodump  [dump what] [op]  [iso file]
+       [dump what]
+       ---------
+       boot         - Dump boot record.
+       p-volume     - Dump primary volume.
+       pathtable    - Dump path table.
+       dir-record [block number] [length] - Dump a raw Format of a Directory Record
+       iso://dir  [output]        - Dump a dirctory or file to [output]
+
+       NONE         - Dump all the information, if this argument is null.
+
+isodump xx.iso      - Dump the iso image
+isodump pathtable xx.iso  - Dump the path table record.
+isodump iso:/     xx.iso  - Dump the root directory of iso image.
+isodump iso:/boot/grup.cfg  /tmp/grub.cfg  xx.iso  - Dump the file "grup.cfg" to "/tmp/grub.cfg"
 """
     exit()
 
@@ -63,42 +76,8 @@ class PathTabelItem(Structure):
                ("pdir_nr", c_ushort),
                ("f_identifier", c_char_p)]
 
-##dump_file(path):
-##    found = False
-##    if not path.startswith("iso:"):
-##        print "is a invalid path name. the valid path should begin with iso:"
-##        return
-##    path = path[4:-1]
-##    dircomps = path.split('/')
-##    dircomp_max = len(dircomps)
-##    #if len(dircomps) == 0:
-##       #dump root
-##    i_comp = 0;
-##    is_file = False
-##    for (i=1; i < g_pathTable.length(), i++):
-##        pathItem = g_pathTable[i]
-##        if (pathItem.pdir_nr == i)
-##        	if (not found):
-##                if pathItem.f_identifier == dircomps[i_comp]:
-##                    found = True
-##        else:
-##            if found:
-##                if (++i_comp == dircomp_max):
-##                    is_file = False ## Is a directory path
-##                	break
-##                else:
-##                    found = False
-##            else:
-##                if i_comp == dircomp_max-1:
-##                    found = True
-##                    is_file = True ##  Is a file path
-##                else:
-##                    print "can't find " + dircomps[i_comp]
-##                break
-##        
-
 # Return a directory record reading from File and Directory Descriptors.
-def read_dir_record(desc_buf):
+def read_dirrecord(desc_buf):
     """ Dump file  dirctory record """ 
     dirRec = DirRecord()
 
@@ -138,7 +117,7 @@ def read_dirs(block_nr=None, total=None):
 
     dirs = []
     while True:
-        dirItem = read_dir_record(desc_buf)
+        dirItem = read_dirrecord(desc_buf)
         if dirItem == None:
             break;
 
@@ -149,43 +128,13 @@ def read_dirs(block_nr=None, total=None):
            break;
     return dirs;
 
-def read_primary_volume(volume_dsc):
-    """ Dump primary volume descriptor """
-    global BLOCK_SIZE
-    global g_priVol
+# Read pathtable record.
+def read_pathtable_L(block_nr, total):
+    """ Read path table of L typde """
+    global g_pathTable
 
-    g_priVol = PrimaryVolume()
-    g_priVol.sys_identifier = volume_dsc[8:40]
-    g_priVol.vol_identifier = volume_dsc[40:72]
-    g_priVol.vol_size = struct.unpack('<L',volume_dsc[80:84])[0]
-    g_priVol.vol_seq = struct.unpack('<H',volume_dsc[124:126])[0]
-    g_priVol.block_size = struct.unpack('<H',volume_dsc[128:130])[0]
-    g_priVol.pt_size = struct.unpack('<L',volume_dsc[132:136])[0]
-    g_priVol.pt_L_rd = struct.unpack('<L',volume_dsc[140:144])[0]
-    g_priVol.fs_ver = struct.unpack('B', volume_dsc[881])[0]
-    dirRec = read_dir_record(volume_dsc[156:190])
-    g_priVol.root_loc = dirRec.loc_extent
-    g_priVol.root_total = dirRec.len_data
-    BLOCK_SIZE = g_priVol.block_size
-
-
-def dump_dirs(dirs=None):
-    """ Dump all the file dirctory records contained in desc_buf """
-
-    print "Dump file/deirectory record"
-    print "===========================\n" 
-
-    for f in dirs:
-        print "length of directory record:(0x%x), length of extend attribute:(%d), location of recore:(%d)BLOCK->(0x%x), data length(%d) size of file unit:(%d), interleave gap size:(%d), file flag:(0x%x),name length:(%d) identify:(%s)\n" %(f.len_dr, f.len_eattr, f.loc_extent, f.loc_extent*BLOCK_SIZE,f.len_data, f.f_unit_size, f.gap_size, f.f_flag, f.len_fi, f.f_identifier)
-        if f.susp_buf != None:
-            dump_extension_SUSP(f.susp_buf, f.len_dr-f.sys_use_star)
-
-def dump_pathtable_L(block_nr, total):
-    """ Dump path table of L typde """
-    
-    print "Dump path table"
-    print "================\n"
-
+    if g_pathTable != []:
+        return
 
     F_ISO.seek(block_nr*BLOCK_SIZE)
     ptbuf = F_ISO.read(BLOCK_SIZE * ((total+BLOCK_SIZE-1)/BLOCK_SIZE))
@@ -201,16 +150,7 @@ def dump_pathtable_L(block_nr, total):
         t.pdir_nr = struct.unpack('<H', ptbuf[6:8])[0]
         t.f_identifier = ptbuf[8:8+t.len_di]
 
-        is_root = False;
-        if t.len_di == 1:
-            is_root = struct.unpack('B', ptbuf[8:9])[0]
-            if is_root == 0 or is_root == 1:
-                print "is a root directory(%d)" %(is_root)
-            
-        print "%d->length of identify:(%d), length of extend attribute:(%d), local:(%d)->(0x%x), parent dir number:(%d), identify:(%s)\n" \
-            %(i, t.len_di, t.len_eattr, t.loc_extent, t.loc_extent*BLOCK_SIZE, t.pdir_nr, t.f_identifier)
-
-        #g_pathTable[i-1] = t;
+        g_pathTable.append(t);
 
         if t.len_di % 2 :
             len_pd = 1
@@ -221,6 +161,180 @@ def dump_pathtable_L(block_nr, total):
         if r_size >= total:         
             break;
         ptbuf = ptbuf[9+t.len_di-1+len_pd:]
+
+def read_primary_volume(volume_dsc):
+    """ Dump primary volume descriptor """
+    global BLOCK_SIZE
+    global g_priVol
+
+    g_priVol = PrimaryVolume()
+    g_priVol.sys_identifier = volume_dsc[8:40]
+    g_priVol.vol_identifier = volume_dsc[40:72]
+    g_priVol.vol_size = struct.unpack('<L',volume_dsc[80:84])[0]
+    g_priVol.vol_seq = struct.unpack('<H',volume_dsc[124:126])[0]
+    g_priVol.block_size = struct.unpack('<H',volume_dsc[128:130])[0]
+    g_priVol.pt_size = struct.unpack('<L',volume_dsc[132:136])[0]
+    g_priVol.pt_L_rd = struct.unpack('<L',volume_dsc[140:144])[0]
+    g_priVol.fs_ver = struct.unpack('B', volume_dsc[881])[0]
+    dirRec = read_dirrecord(volume_dsc[156:190])
+    g_priVol.root_loc = dirRec.loc_extent
+    g_priVol.root_total = dirRec.len_data
+    BLOCK_SIZE = g_priVol.block_size
+
+# path format /xx/xx, is a directory or file path.
+def dump_file(path, output):
+    global g_pathTable
+
+    target_diritem = None
+    found = False
+    is_file = False
+
+    # /root/abc/ - ['', 'root', 'abc', '']
+    # /root/abc  - ['', 'root', 'abc']
+    # /          - ['', '']
+    dircomps = path.split('/')
+    if dircomps[-1] == '':
+        dircomps.pop()
+    if len(dircomps) == 1:
+        target_diritem = g_pathTable[0]
+    else:
+        # Search path table
+        pdir_nr = 1 # root
+        i_dircomp = 1
+        nr = 0;
+        while True:
+            found = False
+            for item in g_pathTable[nr:]:
+                nr = nr + 1 # item number in pathtable
+                #print "(%d) --> (%s)"%(nr, item.f_identifier)
+                if item.pdir_nr < pdir_nr:
+                    #print "%d<%d"%(item.pdir_nr, pdir_nr)
+                    continue
+                elif item.pdir_nr == pdir_nr:
+                    #print "finding.."
+                    if not found :
+                        if item.f_identifier == dircomps[i_dircomp]:
+                            target_diritem = item
+                            found = True
+                            #print "found (%s-->%d)"%(dircomps[i_dircomp], nr)
+                            break
+                        else:
+                            continue
+                else:
+                    found = False
+                    break
+            # for item in g_pathTable
+
+            if found:
+                # Last dir compentent was found in pathtable, must be a dirctory.
+                if i_dircomp == len(dircomps)-1:
+                    is_file = False
+                    break
+                else: # advacne
+                    i_dircomp = i_dircomp + 1
+                    found = False
+                    pdir_nr = nr;
+            else:
+                # Last dir compentent can't be found in pathtable, may be  a file path.
+                if i_dircomp == len(dircomps)-1:
+                    found = True
+                    is_file = True
+                    break
+                else:                    
+                    print "can't find " + dircomps[i_dircomp]
+                    return
+
+    # After search pathtable  
+    if found and target_diritem == None:
+        target_diritem = g_pathTable[0] # file within root dir.
+
+    dirs = read_dirs(target_diritem.loc_extent, BLOCK_SIZE)
+    if dirs != []:
+        # Search/dump dir.
+        target_fileitem = None
+        len_data = dirs[0].len_data
+        loc = target_diritem.loc_extent
+        while True:
+            for d in dirs:
+                if is_file:
+                    if dircomps[-1] == d.f_identifier:
+                        target_fileitem = d                        
+                        break
+                else:
+                    if d.f_identifier == 0:
+                       d.f_identifier = '.'
+                    elif d.f_identifier == 1:
+                       d.f_identifier = '..'
+                    print "    %s"%(d.f_identifier)
+
+            if target_fileitem != None:
+                break
+
+            len_data = len_data - BLOCK_SIZE
+            if len_data > 0:
+                loc = loc + 1 # read next block
+                dirs = read_dirs(loc, BLOCK_SIZE)
+            else:
+                break
+        # while True
+
+        if is_file and target_fileitem != None:
+            loc = target_fileitem.loc_extent
+            F_ISO.seek(BLOCK_SIZE * loc)
+            length = target_fileitem.len_data
+            #print "file length(%d)"%(length)
+            r_size = BLOCK_SIZE
+            if output == "":
+                output = dircomps[-1]
+                print "please specify a output file"
+                return
+            try:
+                f_output = open(output, 'wb')
+            except(IOError):
+                f_output.close()
+                print "can't open(%s) for write"
+                return
+
+            while True:
+                if length == 0:
+                    break 
+                elif length <= BLOCK_SIZE:
+                    r_size = length
+                    length = 0
+                else:
+                    length = length - BLOCK_SIZE
+
+                buf = F_ISO.read(r_size)
+                f_output.write(buf)
+
+            f_output.close()
+            print "dump (%s) to (%s)"%(path, output)
+
+
+def dump_dirrecord(dirs=None):
+    """ Dump all the file dirctory records contained in desc_buf """
+
+    print "Dump file/deirectory record"
+    print "===========================\n" 
+
+    for f in dirs:
+        print "length of directory record:(0x%x), length of extend attribute:(%d), location of recore:(%d)BLOCK->(0x%x), data length(%d) size of file unit:(%d), interleave gap size:(%d), file flag:(0x%x),name length:(%d) identify:(%s)\n" %(f.len_dr, f.len_eattr, f.loc_extent, f.loc_extent*BLOCK_SIZE,f.len_data, f.f_unit_size, f.gap_size, f.f_flag, f.len_fi, f.f_identifier)
+        #if f.susp_buf != None:
+        #    dump_extension_SUSP(f.susp_buf, f.len_dr-f.sys_use_star)
+
+def dump_pathtable_L():
+    """ Dump path table of L typde """
+    
+    print "Dump path table"
+    print "================\n"
+    i = 0;
+    for t in g_pathTable:
+        i = i + 1
+        if t.len_di == 1:
+            if t.f_identifier in [0, 1]:
+                print "is a root directory(%d)" %(is_root)
+        print "%d->length of identify:(%d), length of extend attribute:(%d), local:(%d)->(0x%x), parent dir number:(%d), identify:(%s)\n" \
+            %(i, t.len_di, t.len_eattr, t.loc_extent, t.loc_extent*BLOCK_SIZE, t.pdir_nr, t.f_identifier)
 
 def dump_extension_SUSP(desc_buf, len_buf):
     entry_buf = desc_buf
@@ -301,7 +415,7 @@ def dump_primary_volume():
     if g_priVol == None:
         print "Can't dump, read primary volume first"
         return
-    print "===== Dump promary volume descriptor =="
+    print "===== Dump primary volume descriptor =="
 
     print "System Identifier:(%s)" %(g_priVol.sys_identifier)
     print "Volume Identifier:(%s)" %g_priVol.vol_identifier
@@ -314,7 +428,7 @@ def dump_primary_volume():
     print "pathtable locate (%d)" %(g_priVol.pt_L_rd)
     print "File Structure Version:(%d)" %(g_priVol.fs_ver)
     print "Root directory is at (%d)block, have(0x%x)bytes" %(g_priVol.root_loc, g_priVol.root_total)
-#    dump_dir_record(None, 23, 1)
+#    dump_dirrecord(None, 23, 1)
 
 def dump_boot_record(volume_dsc):
     """ Dump boot record  """
@@ -333,31 +447,65 @@ def dump_boot_record(volume_dsc):
     print "boot  identifier(%s)" %boot_identifier
 
 if __name__ == '__main__':
-    if len(sys.argv) < 2:
+    len_arg = len(sys.argv)
+    if len_arg >= 3:
+        g_cmd = sys.argv[1]
+    elif len_arg == 2:
+        if sys.argv[1] in ["help", "--help", "-h"]:
+           usage()
+        else:
+            g_cmd = "none"
+    else:
         usage()
 
-    F_ISO = open(sys.argv[1], 'rb')
+    try:
+        F_ISO = open(sys.argv[len_arg-1], 'rb')
+    except(IOError):
+        F_ISO.close()
+        usage()
 
+    # read volume descriptor
     desc_nr = 0;
-    while F_ISO:
+    while True:
         desc_nr = desc_nr + 1;
         F_ISO.seek(BLOCK_SIZE*(15+desc_nr))
         volume_dsc = F_ISO.read(BLOCK_SIZE)
-    
         flag = struct.unpack('B',volume_dsc[0])[0]
         if flag == 0:
-            dump_boot_record(volume_dsc)
+            if g_cmd in ["none", "boot"]:
+                dump_boot_record(volume_dsc)
             continue
 
         if flag == 1:
             read_primary_volume(volume_dsc)
-            dump_primary_volume()
-            dump_pathtable_L(g_priVol.pt_L_rd, g_priVol.pt_size)
             dirs = read_dirs(g_priVol.root_loc, g_priVol.root_total)
-            dump_dirs(dirs)
-            dirs = read_dirs(25, 0x1000)
-            dump_dirs(dirs)
+            
+            if g_cmd in ["none", "p-volume"]:
+                dump_primary_volume()          
+                dump_dirrecord(dirs)
+            if g_cmd in ["none", "pathtable"]:
+                read_pathtable_L(g_priVol.pt_L_rd, g_priVol.pt_size)
+                dump_pathtable_L()
             continue
 
         if flag == 255:
             break;
+    # while True
+    
+    if g_cmd == "dir-record":
+        if len_arg == 5:
+            print "dump dir-record (%s, %s)"%(sys.argv[2], sys.argv[3])
+            dirs = read_dirs(int(sys.argv[2]), int(sys.argv[3]))
+            dump_dirrecord(dirs)
+    elif g_cmd.startswith("iso:"):
+        o_path = ""
+        if len_arg == 4:
+            o_path = sys.argv[2]
+        
+        read_pathtable_L(g_priVol.pt_L_rd, g_priVol.pt_size)
+        path = g_cmd[4:]
+        print "dump_file(%s)->(%s)"%(path, o_path)
+        dump_file(path, o_path)
+        
+    F_ISO.close()
+    
