@@ -11,6 +11,7 @@
 import sys
 import struct
 import os
+import re
 from ctypes import *
 
 BLOCK_SIZE = 2048
@@ -31,15 +32,27 @@ Usage: isodump  dump-what [options]  iso-file
        pathtable          - Dump path table.
        dir-record [block number] [length] - Dump a raw data of a Directory Record
 
-       iso://dir [-r]  [-o output]   - Dump a dirctory or file to [output]
+       iso://dir [-r]  [-o output] [-p pattern]  - Dump a dirctory or file to [output]
+           -r    recursively visit directory.
+           -p    spcify a Regular expression pattern for re.search(pattern,).
 
 isodump xx.iso              - Dump the root directory
 isodump pathtable xx.iso    - Dump the path table record.
 
-isodump iso:/ -r     xx.iso  - Dump the root directory of iso image recursively.
-isodump iso:/ -r -o /tmp/iso    xx.iso  - Extract the iso to /tmp/iso/.
-isodump iso:/ -o /tmp/iso    xx.iso  - Extract the root directory of iso to /tmp/iso/.
-isodump iso:/boot/grup.cfg -o /tmp/grub.cfg  xx.iso  - Extract the file "grup.cfg" to "/tmp/grub.cfg"
+isodump iso:/ -r     xx.iso
+    -- Dump the root directory of xx.iso recursively.
+
+isodump iso:/ -r -o /tmp/iso    xx.iso
+    -- Extract the iso to /tmp/iso/.
+
+isodump iso:/boot -o /tmp/iso/boot    xx.iso
+    -- Extract the /boot directory of xx.iso to /tmp/iso/boot.
+
+isodump iso:/boot/grup.cfg -o /tmp/grub.cfg  xx.iso
+    -- Extract the file "grup.cfg" to "/tmp/grub.cfg"
+
+isodump iso:/boot -r -o /tmp/iso -p "*.cfg"  xx.iso
+    -- Extract any files or directories under /boot maching "*.cfg" to /tmp/iso/.
 """
     exit()
 
@@ -177,6 +190,47 @@ def rrip_loop(desc_buf, len_buf):
             break
 
     return rrInode
+
+# ============================================================== #
+
+def search_dir(path):
+    # /root/abc/ - ['', 'root', 'abc', '']
+    # /root/abc  - ['', 'root', 'abc']
+    # /          - ['', '']
+    dircomps = path.split('/')
+    if dircomps[-1] == '':
+        dircomps.pop()
+    if dircomps == []:
+        print "you want dump iso:/ ?" 
+        return
+
+    if len(dircomps) == 1:
+        return g_rootDir
+
+    pdir_loc = g_priVol.root_loc
+    pdir_len = g_priVol.root_total
+    i_dircomp = 1
+
+    while True:
+        found = False
+        dirs = read_dirs(pdir_loc, pdir_len)
+        for item in dirs:
+            if item.f_identifier == dircomps[i_dircomp]:
+                pdir_loc = item.loc_extent
+                pdir_len = item.len_data
+                found = True                
+                #print "found (%s)"%(dircomps[i_dircomp])
+                break
+        if found: # advacne
+            if i_dircomp < len(dircomps)-1:
+                i_dircomp = i_dircomp + 1
+            else:
+                return item
+        else:                    
+            print "can't find " + dircomps[i_dircomp]
+            return None
+
+# ============================================================== #
 
 # Return a directory record reading from File and 
 # Directory Descriptors.
@@ -318,72 +372,48 @@ def read_primary_volume(volume_dsc):
     
     g_rootDir = root_dir
 
-def search_dir(path):
-    # /root/abc/ - ['', 'root', 'abc', '']
-    # /root/abc  - ['', 'root', 'abc']
-    # /          - ['', '']
-    dircomps = path.split('/')
-    if dircomps[-1] == '':
-        dircomps.pop()
-    if dircomps == []:
-        print "you want dump iso:/ ?" 
-        return
-
-    if len(dircomps) == 1:
-        return g_rootDir
-
-    pdir_loc = g_priVol.root_loc
-    pdir_len = g_priVol.root_total
-    i_dircomp = 1
-
-    while True:
-        found = False
-        dirs = read_dirs(pdir_loc, pdir_len)
-        for item in dirs:
-            if item.f_identifier == dircomps[i_dircomp]:
-                pdir_loc = item.loc_extent
-                pdir_len = item.len_data
-                found = True                
-                #print "found (%s)"%(dircomps[i_dircomp])
-                break
-        if found: # advacne
-            if i_dircomp < len(dircomps)-1:
-                i_dircomp = i_dircomp + 1
-            else:
-                return item
-        else:                    
-            print "can't find " + dircomps[i_dircomp]
-            return None
-
-def write_dir(path, output, r):
+def write_dir(path, output, r, pattern):
     d = search_dir(path)
     if d != None:
+        pp = None
+        if pattern != "":
+            p = r'{0}'.format(pattern)
+            pp = re.compile(p)
         if d.f_flag & 0x02 == 0x02:
             if output.endswith("/"):
                 output = output[0:-1]
-            write_dir_r(output, d, r)
+            write_dir_r(output, d, r, pp)
         else:
             write_file(d, output)
 
-def write_dir_r(det_dir, dire, r):
+def write_dir_r(det_dir, dire, r, pp):
     dirs = read_dirs(dire.loc_extent, dire.len_data)
     for d in dirs:
         if not d.f_identifier in [".", ".."]:
+            if (pp != None) and (pp.search(d.f_identifier) == None):
+                match = False
+            else:
+                match = True
+            #print "mathing %s, %s"%(match, d.f_identifier)
             p = det_dir + "/" + d.f_identifier
             if d.f_flag & 0x02 == 0x02:
                 if not os.path.exists(p):
                     os.makedirs(p)
                 if r:
-                    write_dir_r(p, d, r)
-            else:
+                    if match:
+                        write_dir_r(p, d, r, None) # Don't need to match subdirectory.
+                    else:
+                        write_dir_r(p, d, r, pp)
+            elif match:
                 write_file(d, p)
 
 def write_file(file_rec, det_file):
     """ Write a file to det_file """
 
     if det_file == "" or file_rec == None:
-        print " can't write file"
+        print "can't write file"
         return
+
     print "write file (%s)"%(det_file)
     dir_nm = os.path.dirname(det_file)
     if not os.path.exists(dir_nm):
@@ -555,22 +585,33 @@ if __name__ == '__main__':
         o_path = ""
         r = False
         o = False
+        p = False
+        pattern = ""
         for arg in sys.argv[2:-1]:
             if arg == "-r":
                 r = True
                 o = False
+                p = False
             elif arg == "-o":
                 o = True
+                p = False
+            elif arg == "-p":
+                o = False
+                p = True
             elif o == True:
                 o_path = arg
+                o = False
+            elif p == True:
+                pattern = arg
+                p = False
 
         iso_path = dump_what[4:]
         if o_path == "":
             print "dump_dir(%s)"%(iso_path)
             dump_dir(iso_path, r)
         else:
-            write_dir(iso_path, o_path, r)
-            print "write_dir(%s)->(%s)"%(iso_path, o_path)
+            write_dir(iso_path, o_path, r, pattern)
+            print "write_dir(%s)->(%s) with pattern(%s)"%(iso_path, o_path, pattern)
 
     g_fISO.close()
     
