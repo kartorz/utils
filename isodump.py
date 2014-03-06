@@ -16,7 +16,7 @@ from ctypes import *
 
 BLOCK_SIZE = 2048
 
-g_fISO = ""
+g_fISO = None
 g_priVol = None
 g_rripOffset = -1
 g_rootDir = None
@@ -54,7 +54,7 @@ isodump iso:/boot/grup.cfg -o /tmp/grub.cfg  xx.iso
 isodump iso:/boot -r -o /tmp/iso -p "*.cfg"  xx.iso
     -- Extract any files or directories under /boot maching "*.cfg" to /tmp/iso/.
 """
-    exit()
+    sys.exit(-1)
 
 class PrimaryVolume(Structure):
     _fields = [("sys_identifier", c_char_p),
@@ -512,8 +512,8 @@ def dump_primary_volume():
     print "Volume sequence number:(%d)" %(g_priVol.vol_seq)
     print "logic block size:(0x%x)" %(g_priVol.block_size)
     print "Volume path talbe L's BLOCK number is :(0x%x-->0x%x)" %(g_priVol.pt_L_rd, g_priVol.pt_L_rd*BLOCK_SIZE)
-    print "Abstract File Identifier: (%s)" %(volume_dsc[739:776])
-    print "Bibliographic File Identifier: (%s)" %(volume_dsc[776:813])
+#    print "Abstract File Identifier: (%s)" %(volume_dsc[739:776])
+#    print "Bibliographic File Identifier: (%s)" %(volume_dsc[776:813])
     print "pathtable locate (%d)" %(g_priVol.pt_L_rd)
     print "File Structure Version:(%d)" %(g_priVol.fs_ver)
     print "Root directory is at (%d)block, have(0x%x)bytes" %(g_priVol.root_loc, g_priVol.root_total)
@@ -535,13 +535,15 @@ def dump_boot_record(volume_dsc):
     boot_identifier = volume_dsc[39:71]
     print "boot  identifier(%s)" %boot_identifier
 
-if __name__ == '__main__':
-    if len(sys.argv) < 3:
+def main(argv=sys.argv):
+    global g_fISO
+
+    if len(argv) < 3:
         usage()
 
-    dump_what = sys.argv[1]
+    dump_what = argv[1]
     try:
-        g_fISO = open(sys.argv[-1], 'rb')
+        g_fISO = open(argv[-1], 'rb')
     except(IOError):
         g_fISO.close()
         usage()
@@ -575,9 +577,9 @@ if __name__ == '__main__':
         path_table = read_pathtable_L(g_priVol.pt_L_rd, g_priVol.pt_size)
         dump_pathtable_L(path_table)
     if dump_what == "dir-record":
-        if len(sys.argv) == 5:
-            print "dump dir-record (%s, %s)"%(sys.argv[2], sys.argv[3])
-            dirs = read_dirs(int(sys.argv[2]), int(sys.argv[3]))
+        if len(argv) == 5:
+            print "dump dir-record (%s, %s)"%(argv[2], argv[3])
+            dirs = read_dirs(int(argv[2]), int(argv[3]))
             dump_dirrecord(dirs)
         else:
             usage()
@@ -587,7 +589,7 @@ if __name__ == '__main__':
         o = False
         p = False
         pattern = ""
-        for arg in sys.argv[2:-1]:
+        for arg in argv[2:-1]:
             if arg == "-r":
                 r = True
                 o = False
@@ -614,4 +616,15 @@ if __name__ == '__main__':
             print "write_dir(%s)->(%s) with pattern(%s)"%(iso_path, o_path, pattern)
 
     g_fISO.close()
-    
+    return 0
+
+# @dir_name: iso:/dir
+# @pattern: Regular Expression.
+# @iso_name: iso file path.
+def extract_directory(dir_name, out_dir, iso_name, pattern=""):
+    """ Extract a directory for iso file  """
+    argv = ["isodump.py", dir_name, "-r", "-o", out_dir, "-p", pattern, iso_name]
+    main(argv)
+
+if __name__ == '__main__':
+    sys.exit(main())
