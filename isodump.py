@@ -16,6 +16,19 @@ import stat
 from ctypes import *
 
 BLOCK_SIZE = 2048
+S_IFSOCKET = 0o140000
+S_IFLINK   = 0o120000
+S_IFREG    = 0o100000
+S_IFBLK    = 0o060000
+S_IFCHR    = 0o020000
+S_IFDIR    = 0o040000
+S_IFIFO    = 0o010000
+
+#  0  : success.
+# -1  : failure.
+# -2  : can't make non-regular file(device file, socket, fifo).
+# -3  : can't open file.
+err_no = 0
 
 g_fISO = None
 g_priVol = None
@@ -180,7 +193,7 @@ def rrip_loop(desc_buf, len_buf):
                 continue
 
             if sig1 == ord('P') and sig2 == ord('X'):
-                fMode = struct.unpack("<L", entry_buf[4:8])[0]
+                rrInode.fMode = struct.unpack("<L", entry_buf[4:8])[0]
                 s_link = struct.unpack("<L", entry_buf[12:16])[0]
                 uid = struct.unpack("<L", entry_buf[20:24])[0]
                 gid = struct.unpack("<L", entry_buf[28:32])[0]
@@ -386,6 +399,7 @@ def read_primary_volume(volume_dsc):
     g_rootDir = root_dir
 
 def write_dir(path, output, r, pattern):
+    """ Extract a directory """
     d = search_dir(path)
     if d != None:
         pp = None
@@ -398,8 +412,11 @@ def write_dir(path, output, r, pattern):
             write_dir_r(output, d, r, pp)
         else:
             write_file(d, output)
+    else:
+        err_no = -1
 
 def write_dir_r(det_dir, dire, r, pp):
+    #print "write dir:(%s)"%(det_dir)
     dirs = read_dirs(dire.locExtent, dire.lenData)
     for d in dirs:
         if not d.fIdentifier in [".", ".."]:
@@ -411,10 +428,14 @@ def write_dir_r(det_dir, dire, r, pp):
             p = det_dir + "/" + d.fIdentifier
             if d.fFlag & 0x02 == 0x02:
                 if not os.path.exists(p):
-                    os.makedirs(p, 0777)
+                    try:
+                        os.makedirs(p, 0777)
+                    except(OSError):
+                        err_no = -1
+                        return
                 if r:
                     if match:
-                        write_dir_r(p, d, r, None) # Don't need to match subdirectory.
+                        write_dir_r(p, d, r, None) # Don't need to match subdirectory.                        
                     else:
                         write_dir_r(p, d, r, pp)
             elif match:
@@ -424,16 +445,21 @@ def write_file(dirRec, detFile):
     """ Write a file to detFile """
 
     if detFile == "" or dirRec == None:
-        print "can't write file"
+        sys.stderr.write("can't write file\n")
+        err_no = -1
         return
 
-    print "write file (%s)"%(detFile)
+    #print "write file (%s)"%(detFile)
     dirname = os.path.dirname(detFile)
     if not os.path.exists(dirname):
-        os.makedirs(dirname, 0777)
+        try:
+            os.makedirs(dirname, 0777)
+        except(OSError):
+            err_no = -1
+            return
     
     # device file
-    if dirRec.rrip.devH != 0 or dirRec.rrip.devL != 0:
+    if dirRec.rrip != None and (dirRec.rrip.devH != 0 or dirRec.rrip.devL != 0):
         #fFlag == 0
         high = dirRec.rrip.devH
         low = dirRec.rrip.devL
@@ -442,11 +468,14 @@ def write_file(dirRec, detFile):
         else:
             device = os.makedev(high, os.minor(low))
         try:
-            #print "mknode(%s, %x)"%(detFile, device)
-            os.mknod(detFile, 0777|stat.S_IFCHR, device)
+            mode = dirRec.rrip.fMode & 0o770000
+            if mode == S_IFCHR:
+                os.mknod(detFile, 0777|stat.S_IFCHR, device)
+            elif mode  == S_IFBLK:
+                os.mknod(detFile, 0777|stat.S_IFBLK, device)
         except(OSError):
-            print "can't mknode(%s)"%(detFile)
-
+            sys.stderr.write("can't mknode, maybe no permission\n")
+            err_no = -2
         return
 
     loc = dirRec.locExtent
@@ -458,7 +487,8 @@ def write_file(dirRec, detFile):
     try:
         f_output = open(detFile, 'wb')
     except(IOError):
-        print "can't open(%s) for write"%(detFile)
+        sys.stderr.write("can't open{0} for write".format(detFile))
+        err_no = -3
         return
 
     while True:
@@ -483,20 +513,24 @@ def dump_dir(path, r):
             print "==========================================\n"
             if path.endswith("/"):
                 path = path[0:-1]
-            dump_dir_r(path, d, r)
+
+            file_list = []
+            read_files_r(file_list, path, d, r)
+            for f in file_list:
+                print f
     	else:
             print("%s is a file")%(path)
 
-def dump_dir_r(dir_path, dire, r):
+def read_files_r(file_list, dir_path, dire, r):
     if (dire.fFlag & 0x02) != 0x02:
         return
     dirs = read_dirs(dire.locExtent, dire.lenData)
     for d in dirs:
         if not d.fIdentifier in [".", ".."]:
             p = dir_path + "/" + d.fIdentifier
-            print p
+            file_list.append(p)
             if r:
-                dump_dir_r(p, d, r)
+                read_files_r(file_list, p, d, r)
 
 def dump_dirrecord(dirs=None):
     """ Dump all the file dirctory records contained in desc_buf """
@@ -647,15 +681,20 @@ def main(argv=sys.argv):
             print "write_dir(%s)->(%s) with pattern(%s)"%(iso_path, o_path, pattern)
 
     g_fISO.close()
-    return 0
+    return err_no
 
 # @dir_name: iso:/dir
 # @pattern: Regular Expression.
 # @iso_name: iso file path.
+# @ return
+#     0 : success.
+#    -1 : failure.
+#    -2 : no permission.
 def extract_directory(dir_name, out_dir, iso_name, pattern=""):
     """ Extract a directory for iso file  """
+
     argv = ["isodump.py", dir_name, "-r", "-o", out_dir, "-p", pattern, iso_name]
-    main(argv)
+    sys.exit(main(argv))
 
 if __name__ == '__main__':
     sys.exit(main())
