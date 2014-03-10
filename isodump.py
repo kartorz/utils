@@ -694,7 +694,7 @@ def extract_directory(dir_name, out_dir, iso_name, pattern=""):
     """ Extract a directory for iso file  """
 
     argv = ["isodump.py", dir_name, "-r", "-o", out_dir, "-p", pattern, iso_name]
-    sys.exit(main(argv))
+    return(main(argv))
 
 if __name__ == '__main__':
     sys.exit(main())
