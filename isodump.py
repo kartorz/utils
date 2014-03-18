@@ -410,17 +410,16 @@ class ISO9660:
             if pattern != "":
                 p = r'{0}'.format(pattern)
                 pp = re.compile(p)
-
+            #print "writeDir: flag(%x)"%(d.fFlag)
             if d.fFlag & 0x02 == 0x02:
                 # Check if a clean directory.
-                try:
-                    if len(os.listdir(output)) > 0:
-                        sys.stderr.write("The target directory is not empty\n")
-                        return E_FAILURE
-                except(OSError):
-                    sys.stderr.write("can't access dirs({0})\n".format(p))
-                    return E_FAILURE
-
+                #try:
+                #    if len(os.listdir(output)) > 0:
+                #        sys.stderr.write("The target directory is not empty\n")
+                #        return E_FAILURE
+                #except(OSError):
+                #    sys.stderr.write("can't access dirs({0})\n".format(p))
+                #    return E_FAILURE
                 self.writeDir_r(output, d, pp, r, all_type)
                 return E_SUCCESS
             else:
@@ -429,7 +428,7 @@ class ISO9660:
             return E_FAILURE
     
     def writeDir_r(self, det_dir, dire, pp, r, all_type):
-        #print "write dir:(%s)"%(det_dir)
+        #print "writeDir_r:(%s)"%(det_dir)
         dirs = self.readDirItems(dire.locExtent, dire.lenData)
         for d in dirs:
             if not d.fIdentifier in [".", ".."]:
@@ -437,7 +436,7 @@ class ISO9660:
                     match = False
                 else:
                     match = True
-                #print "mathing %s, %s"%(match, d.fIdentifier)
+                #print "mathing %s, %s, (%x)"%(match, d.fIdentifier, d.fFlag)
                 p = det_dir + "/" + d.fIdentifier
                 if d.fFlag & 0x02 == 0x02:
                     if not os.path.exists(p):
@@ -449,7 +448,7 @@ class ISO9660:
                             self.writeDir_r(p, d, pp, r, all_type)
                 elif match:
                     self.writeFile(d, p, all_type)
-            # if not d.fIdentifier end #
+            # if not d.fIdentifier end #            
         # for d in dirs end #
     
     def writeFile(self, dirRec, detFile, all_type):
