@@ -509,10 +509,10 @@ class ISO9660:
         length = dirRec.lenData
         self.isoFile.seek(BLOCK_SIZE * loc)
         #print "file length(%d)"%(length)
-        r_size = BLOCK_SIZE*1024*10 #20M cache
+        r_size = BLOCK_SIZE*1024*50 #100M cache
     
         try:
-            f_output = open(detFile, 'wb')
+            f_output = open(detFile, 'wb', r_size)
         except(IOError):
             sys.stderr.write("can't open{0} for write\n".format(detFile))            
             return E_FAILURE
