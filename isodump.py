@@ -528,6 +528,7 @@ class ISO9660:
     
             buf = self.isoFile.read(r_size)
             f_output.write(buf)
+            f_output.flush()
         # while True end.
         f_output.close()
         return E_SUCCESS
