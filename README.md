@@ -9,7 +9,7 @@ Copyright (c) 2014 LiQiong Lee.
 Redistribution and use of the scripts under the GNU GENERAL PUBLIC LICENSE, version 3 (GPLv3).
 
 
-isodump.py
+isodump(3).py
 ==========
 
 Dump raw meta data of iso9660 file system.
