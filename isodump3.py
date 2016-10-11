@@ -263,11 +263,9 @@ class ISO9660:
         """
         self.isoFile.seek(0x01FE)
         h = self.isoFile.read(2)
-        s1 = struct.unpack('B', h[0])[0]
-        s2 = struct.unpack('B', h[1])[0]
-
-        #print "-->(0x%x,0x%x)" %(s1, s2)
-
+        s1 = struct.unpack('B', h[0:1])[0]
+        s2 = struct.unpack('B', h[1:2])[0]
+        #print("-->(0x%x,0x%x)" %(s1, s2))
         if (s1 == 0x55) and (s2 == 0xAA):
             result = True   # "Bootable"
         else:
@@ -739,8 +737,9 @@ if __name__ == '__main__':
         print("iso file is broken")
         sys.exit(-1)
 
-    dump_what = argv[1]
+    #print("bootable:%s"%(iso9660fs.checkISOBootable()))
 
+    dump_what = argv[1]
     if dump_what == "primary-volume":
         dump_primary_volume(iso9660fs.priVol)
     elif dump_what == "pathtable":
